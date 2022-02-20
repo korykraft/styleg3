@@ -1,0 +1,177 @@
+# StyleGAN2 Workflow 2 of 2: Train and evaluate model
+#
+# This is the YAML file used to run the Gradient modeling Workflow for the sample project based on StyleGAN2 at
+# https://docs.paperspace.com/gradient/get-started/tutorials-list/workflows-sample-project .
+#
+# See that URL for details on how to run the project.
+#
+# We assume the reader is familiar with the basics of Workflows, and here wishes to use them for real projects.
+#
+# Steps performed by the Workflow
+#
+# 1. Clone StyleGAN repo into managed storage provider dataset
+# 2. Get pretrained cat model
+# 3. Run evaluation on pretrained cat model
+# 4. Show generating images using pretrained cat model
+# 5. Train our model on image subsample
+# 6. Run evaluation on our trained model
+# 7. Show generating images with our trained model
+#
+# Dataset IDs
+#
+# The user needs to create their own Gradient managed datasets for job outputs, using the same names as here.
+# See the project documentation for details on how to do this.
+#
+# Job name                         Gradient managed dataset name
+#
+# getPretrainedModel            -> stylegan2-wsp-pretrained-network
+# evaluatePretrainedModel       -> stylegan2-wsp-evaluation-pretrained
+# generateImagesPretrainedModel -> stylegan2-wsp-generated-cats-pretrained
+# trainOurModel                 -> stylegan2-wsp-our-trained-network
+# evaluateOurModel              -> stylegan2-wsp-evaluation-ours
+# generateImagesOurModel        -> stylegan2-wsp-generated-cats-ours
+#
+# The names for the Gradient managed datasets should correspond to the names output from running the first workflow of
+# the pair in this project (stylegan2-download-and-extract-data.yaml).
+#
+# We create different datasets for the output from each job because jobs can run in parallel and if their outputs were
+# put into the same dataset it would create clashing versions.
+#
+# Last updated: Nov 03rd 2021
+
+# Trigger Workflow to run on any update (commit) to the repository when linked to a Gradient project
+# (uncomment to activate)
+#
+# An example of a change is to change the random seeds for image generation in the --seeds=6600-6605 argument to the
+# python run_generator.py generate-images command in job 4 (generateImagesPretrainedModel) below
+
+on:
+ github:
+   branches:
+     only: main
+
+jobs:
+
+  # 1. Clone StyleGAN repo into managed storage provider dataset
+
+  cloneStyleGAN3Repo:
+    resources:
+      instance-type: C4
+    outputs:
+      repo:
+        type: volume
+    uses: git-checkout@v1
+    with:
+      url: https://github.com/korykraft/styleg3.git
+
+
+  # 5. Train our model on image subsample
+
+  # This could be extended to a larger image set by passing it in instead
+
+  # Comment the first "ref:" line and uncomment the second one under "inputs:" below if you ran Workflow 1 yourself and
+  # want to use its output rather than gradient/stylegan2-workflows-sample-project-extr-img, which is the public dataset
+
+  generateImages:
+    resources:
+      instance-type: P4000 # Or P6000, V100
+    needs:
+      - cloneStyleGAN3Repo
+    inputs:
+      repo: cloneStyleGAN3Repo.outputs.repo
+    outputs:
+      generatedCatsOurs:
+        type: dataset
+        with:
+          ref: stylegan3-wsp-generated-cats-ours
+    uses: script@v1
+    with:
+      script: |-
+        pip install imageio imageio-ffmpeg==0.4.4 pyspng==0.1.0
+        cp -R /inputs/repo /styleg3        
+        cd /styleg3
+        conda env create -f environment.yml
+        conda activate stylegan3
+        python gen_images.py --outdir=out --trunc=1 --seeds=2 \
+          --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-r-afhqv2-512x512.pkl
+        
+      image: nvcr.io/nvidia/pytorch:21.08-py3
+
+  # # 6. Run evaluation on our trained model
+
+  # # Note here we are evaluating on the same images as used for training
+  # # Since our model was only trained on a small subset it doesn't matter here
+
+  # # Comment the first "ref:" line and uncomment the second one under "inputs:" below if you ran Workflow 1 yourself and
+  # # want to use its output rather than gradient/stylegan2-workflows-sample-project-extr-img, which is the public dataset
+
+  # evaluateOurModel:
+  #   resources:
+  #     instance-type: P4000 # Or P6000, V100
+  #   needs:
+  #     - cloneStyleGAN2Repo
+  #     - trainOurModel
+  #   inputs:
+  #     repo: cloneStyleGAN2Repo.outputs.repo
+  #     extractedImagesForTraining:
+  #       type: dataset
+  #       with:
+  #         ref: gradient/stylegan2-workflows-sample-project-extr-img
+  #         #ref: stylegan2-wsp-extr-img
+  #     ourTrainedNetwork: trainOurModel.outputs.ourTrainedNetwork
+  #   outputs:
+  #     evaluationOurs:
+  #       type: dataset
+  #       with:
+  #         ref: stylegan2-wsp-evaluation-ours
+  #   uses: script@v1
+  #   with:
+  #     script: |-
+  #       pip install scipy==1.3.3
+  #       pip install requests==2.22.0
+  #       pip install Pillow==6.2.1
+  #       cp -R /inputs/repo /stylegan2
+  #       cp -R /inputs/extractedImagesForTraining/cat_images_tfrecords /stylegan2
+  #       cp    /inputs/ourTrainedNetwork/00000-stylegan2-cat-1gpu-config-f/network-final.pkl /stylegan2
+  #       cd /stylegan2
+  #       python run_metrics.py \
+  #         --data-dir=/stylegan2/cat_images_tfrecords \
+  #         --network=/stylegan2/network-final.pkl \
+  #         --metrics=fid50k,ppl2_wend \
+  #         --dataset=cat \
+  #         --result-dir=/outputs/evaluationOurs
+  #       ls "-aFlR" /outputs
+  #     image: tensorflow/tensorflow:1.14.0-gpu-py3
+
+  # 7. Show generating images with our trained model
+
+  # generateImagesOurModel:
+  #   resources:
+  #     instance-type: P4000
+  #   needs:
+  #     - cloneStyleGAN2Repo
+  #     - trainOurModel
+  #   inputs:
+  #     repo: cloneStyleGAN2Repo.outputs.repo
+  #     ourTrainedNetwork: trainOurModel.outputs.ourTrainedNetwork
+  #   outputs:
+  #     generatedCatsOurs:
+  #       type: dataset
+  #       with:
+  #         ref: stylegan2-wsp-generated-cats-ours
+  #   uses: script@v1
+  #   with:
+  #     script: |-
+  #       pip install scipy==1.3.3
+  #       pip install requests==2.22.0
+  #       pip install Pillow==6.2.1
+  #       cp -R /inputs/repo /stylegan2
+  #       cp    /inputs/ourTrainedNetwork/00000-stylegan2-cat-1gpu-config-f/network-final.pkl /stylegan2
+  #       cd /stylegan2
+  #       python run_generator.py generate-images \
+  #         --network=/stylegan2/network-final.pkl \
+  #         --seeds=6600-6605 \
+  #         --truncation-psi=0.5 \
+  #         --result-dir=/outputs/generatedCatsOurs
+  #       ls "-aFlR" /outputs
+  #     image: tensorflow/tensorflow:1.14.0-gpu-py3
